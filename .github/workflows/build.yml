@@ -1,1 +1,60 @@
 
+# MC Panel — сборка в облаке GitHub: приложение для Android и пакет для Windows.
+# Берёт проект из папок репозитория или из загруженного архива mcpanel.zip.
+# Готовые файлы появляются в разделе Releases: mc-panel.apk и MC-Panel-Windows.zip.
+name: Build MC Panel
+on:
+  push:
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find project
+        run: |
+          if [ -f server.js ] && [ -d android ]; then echo "SRC=$PWD" >> $GITHUB_ENV; exit 0; fi
+          Z=$(find . -maxdepth 3 -iname 'mcpanel*.zip' -not -path './.git/*' | head -1)
+          if [ -z "$Z" ]; then echo "::error::Загрузите в репозиторий архив mcpanel.zip (Add file → Upload files)"; exit 1; fi
+          echo "Архив: $Z"
+          mkdir -p /tmp/p && unzip -q -o "$Z" -d /tmp/p
+          D=$(dirname "$(find /tmp/p -name server.js -not -path '*/node_modules/*' | head -1)")
+          [ -d "$D/android" ] || { echo "::error::В архиве нет проекта MC Panel"; exit 1; }
+          echo "SRC=$D" >> $GITHUB_ENV
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Build APK
+        run: cd "$SRC/android" && gradle --no-daemon assembleRelease
+      - name: Windows package
+        run: |
+          V=$(curl -fsSL https://nodejs.org/dist/index.json | jq -r '[.[] | select(.version | startswith("v22."))][0].version')
+          echo "Node.js $V"
+          curl -fsSL -o node.zip "https://nodejs.org/dist/$V/node-$V-win-x64.zip"
+          unzip -q node.zip "node-$V-win-x64/node.exe"
+          P=out/MC-Panel
+          mkdir -p $P/node
+          cp "node-$V-win-x64/node.exe" $P/node/
+          cp -r "$SRC"/server.js "$SRC"/package.json "$SRC"/src "$SRC"/public "$SRC"/agent "$SRC"/tools $P/
+          cp "$SRC"/pc/* $P/
+          rm -f $P/agent/agent.config.json
+          (cd out && zip -qr ../MC-Panel-Windows.zip MC-Panel)
+          cp "$SRC/android/app/build/outputs/apk/release/app-release.apk" mc-panel.apk
+          ls -la mc-panel.apk MC-Panel-Windows.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: MC Panel
+          body: |
+            **MC-Panel-Windows.zip** — для компьютера с сервером Minecraft: распакуйте в папку сервера и запустите start-panel.bat.
+            **mc-panel.apk** — приложение для Android: само находит панель в вашей Wi-Fi сети.
+          files: |
+            mc-panel.apk
+            MC-Panel-Windows.zip
+          make_latest: true
